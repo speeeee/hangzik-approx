@@ -6,6 +6,7 @@
 #include <ctime>
 
 #include <sndfile.h>
+#include <fftw3.h>
 
 #include <vector>
 #include <functional>
@@ -15,7 +16,7 @@
 #endif
 
 #define	SAMPLE_RATE  44100
-#define	SAMPLE_COUNT (SAMPLE_RATE * 10) /* 10 keys played */
+#define	SAMPLE_COUNT (SAMPLE_RATE * 10) /* 10 seconds of audio sampled. */
 #define	AMPLITUDE    (1.0 * 0x7F000000)
 #define	FREQ         (55.0 / SAMPLE_RATE)
 
@@ -39,19 +40,33 @@ double sin_sum(int amplitude, int index, std::vector<Signal> a) { double ret = 0
 
 int clampl(int a, int c) { return a<c?c:a; }
 
-int main (void) { SNDFILE *file; srand(time(NULL));
-  SF_INFO osfinfo;
+int main (void) { SNDFILE *file; SNDFILE *ifile; srand(time(NULL));
+  SF_INFO osfinfo; SF_INFO isfinfo;
 
-  memset (&osfinfo, 0, sizeof(osfinfo));
+  memset(&osfinfo, 0, sizeof(osfinfo));
+  memset(&osfinfo, 0, sizeof(isfinfo));
 
   osfinfo.samplerate = SAMPLE_RATE;
   osfinfo.frames = SAMPLE_COUNT;
   osfinfo.channels = 1;
   osfinfo.format = (SF_FORMAT_WAV | SF_FORMAT_PCM_24);
 
-  if (! (file = sf_open ("sine.wav", SFM_WRITE, &osfinfo))) {
+  /* reading file and performing Fourier transform for analysis. */
+  if(!(ifile = sf_open("isine.wav", SFM_WRITE, &isfinfo))) {
+    printf("ERROR: Not able to open input file.  'isine.wav' may not exist.\n"); return 1; }
+  std::vector<double> buf(SAMPLE_COUNT);
+  int sz = sf_read_double(ifile, &buf[0], SAMPLE_COUNT); buf.resize(sz);
+  fftw_complex *out = (fftw_complex *)fftw_malloc(buf.size()*sizeof(fftw_complex));
+  fftw_plan p = fftw_plan_dft_r2c_1d(buf.size(),&buf[0],out,FFTW_ESTIMATE);
+
+  fftw_execute(p); fftw_destroy_plan(p); fftw_free(out);
+  sf_close(ifile);
+
+  /* begin working with output. */
+  if(!(file = sf_open ("sine.wav", SFM_WRITE, &osfinfo))) {
     printf ("ERROR: Not able to open output file.\n"); return 1; }
 
+  // TODO: make actual "play-key" function, which has a duration, a delay, and an amplitude.
   // very rough idea of what is for later.  this "font" will be used to approximate more complex
   //   signlas.
   std::vector<RSignal> sfnt(10,std::vector<int>(SAMPLE_RATE));
@@ -61,18 +76,6 @@ int main (void) { SNDFILE *file; srand(time(NULL));
       for(int q=0;q<SAMPLE_RATE;q++) {
         sfnt[i][q] = AMPLITUDE/e*a[f](2*M_PI*freq/SAMPLE_RATE*q); } } }
 
-  /*if (osfinfo.channels == 1) {
-    for(int i = 0, amp = AMPLITUDE; i < SAMPLE_COUNT; i++) {
-      // not quite correct for decay of piano.
-      // following line modifies 'amp' in rhs.
-      //buffer[i] = (amp = clampl(amp-0x7F00,0))/2*(sin(FREQ*2*i*M_PI)+sin(220./SAMPLE_RATE*2*i*M_PI));
-      buffer[i] = sin_sum(amp = clampl(amp-0x7F00,0),i
-        , { [](int q) { return sin(FREQ*2*q*M_PI); },
-            [](int q) { return square(q*FREQ*2*M_PI); } }); } }
-      buffer[i] = sfnt[0][i%SAMPLE_RATE]; } }
-      //std::vector<Sin> a; for(int t=0;t<10;t++) {
-      //  a.push_back([t](int q) { return sin(440./pow(1.1,t)/SAMPLE_RATE*2*q*M_PI); }); }
-      //buffer[i] = sin_sum(amp = clampl(amp-0x7F00,0),i,a); } }*/
   for(int i=0;i<10;i++) {
     if(sf_write_int(file, &(sfnt[i][0]), osfinfo.channels*SAMPLE_RATE)!=osfinfo.channels*SAMPLE_RATE) {
       puts(sf_strerror(file)); }
